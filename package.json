@@ -1,0 +1,39 @@
+{
+  "name": "@rebasedotdev/mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Rebase — give your coding agent the full context of every bug report.",
+  "type": "module",
+  "bin": {
+    "rebase-mcp": "./bin/rebase-mcp.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "vitest run"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  },
+  "keywords": [
+    "rebase",
+    "mcp",
+    "feedback",
+    "bug-reports",
+    "agents"
+  ],
+  "license": "MIT"
+}
