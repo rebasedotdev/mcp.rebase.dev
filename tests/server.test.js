@@ -106,6 +106,25 @@ describe('tools', () => {
     expect(JSON.parse(result.content[0].text).tickets[0].id).toBe('t1');
   });
 
+  it('search_tickets passes the query through and returns scored results', async () => {
+    const fetchImpl = fakeFetch({
+      '/v1/tickets/search': jsonResponse({
+        results: [{ id: 't1', title: 'Checkout total wrong', status: 'open', kind: 'bug', score: 0.91 }],
+      }),
+    });
+    const client = new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl });
+    const server = buildServer(client);
+
+    const result = await callTool(server, 'search_tickets', { q: 'checkout total', status: 'open', limit: 5 });
+
+    const [url] = fetchImpl.mock.calls[0];
+    expect(String(url)).toContain('/v1/tickets/search');
+    expect(String(url)).toContain('q=checkout+total');
+    expect(String(url)).toContain('status=open');
+    expect(String(url)).toContain('limit=5');
+    expect(JSON.parse(result.content[0].text).results[0].score).toBe(0.91);
+  });
+
   it('get_ticket returns the capture and an image block when asked', async () => {
     const png = Buffer.from('png-bytes');
     const client = api({

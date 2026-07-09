@@ -74,6 +74,11 @@ export class RebaseApi {
     return this.request('GET', '/v1/tickets', { query: params });
   }
 
+  /** @param {{ q: string, status?: string, limit?: number }} params */
+  searchTickets(params) {
+    return this.request('GET', '/v1/tickets/search', { query: params });
+  }
+
   /** @param {string} ticketId */
   getTicket(ticketId) {
     return this.request('GET', `/v1/tickets/${encodeURIComponent(ticketId)}`);
