@@ -32,6 +32,23 @@ export function buildServer(api) {
   );
 
   server.registerTool(
+    'search_tickets',
+    {
+      description:
+        'Semantic search over the project’s tickets ("checkout total wrong", "anything about the pricing page"). Matches by meaning, not keywords — use it before filing or fixing to find related or duplicate reports. Returns id, title, status, kind, and a relevance score; use get_ticket for full context. Rate-limited: batch questions rather than looping.',
+      inputSchema: {
+        q: z.string().min(2).max(500).describe('What to look for, in natural language.'),
+        status: z.enum(STATUSES).optional().describe('Filter by status. Omit for all tickets.'),
+        limit: z.number().int().min(1).max(25).optional().describe('Max results (default 10).'),
+      },
+    },
+    async ({ q, status, limit }) => {
+      const data = await api.searchTickets({ q, status, limit });
+      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
     'get_ticket',
     {
       description:
