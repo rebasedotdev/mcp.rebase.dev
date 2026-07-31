@@ -18,6 +18,18 @@ export class RebaseApi {
     if (!token) {
       throw new Error('REBASE_API_TOKEN is required (mint one in widget Settings → Project → API tokens).');
     }
+    let parsed;
+    try {
+      parsed = new URL(baseUrl);
+    } catch {
+      throw new Error(`REBASE_API_URL is not a valid URL: ${JSON.stringify(baseUrl)}`);
+    }
+    // The token rides every request as a Bearer header — never let it travel
+    // over cleartext to a non-local host.
+    const isLocal = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLocal)) {
+      throw new Error('REBASE_API_URL must use https:// (plain http is allowed only for localhost).');
+    }
     this.token = token;
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.fetch = fetchImpl;
@@ -27,12 +39,12 @@ export class RebaseApi {
   /**
    * @param {string} method
    * @param {string} path
-   * @param {{ query?: Record<string, string | number | undefined>, body?: unknown }} [options]
+   * @param {{ query?: Record<string, string | number | null | undefined>, body?: unknown }} [options]
    */
   async request(method, path, { query, body } = {}) {
     const url = new URL(this.baseUrl + path);
     for (const [key, value] of Object.entries(query ?? {})) {
-      if (value !== undefined && value !== '') url.searchParams.set(key, String(value));
+      if (value != null && value !== '') url.searchParams.set(key, String(value));
     }
 
     let response;
@@ -52,7 +64,9 @@ export class RebaseApi {
       if (err?.name === 'TimeoutError') {
         throw new Error(`Rebase API request timed out after ${String(this.timeoutMs)}ms.`);
       }
-      throw new Error(`Rebase API request failed: ${err?.message ?? String(err)}`);
+      // undici buries the real reason (ENOTFOUND, ECONNREFUSED, TLS) in cause.
+      const cause = err?.cause?.message ? ` (${err.cause.message})` : '';
+      throw new Error(`Rebase API request failed: ${err?.message ?? String(err)}${cause}`);
     }
 
     if (!response.ok) {
@@ -63,13 +77,17 @@ export class RebaseApi {
       } catch {
         // non-JSON error body — the status alone will have to do
       }
-      throw new Error(`Rebase API ${String(response.status)}${detail ? `: ${detail}` : ''}`);
+      // Relay the throttle's wait hint; Retry-After may legally be an
+      // HTTP-date, so only pass through plain seconds.
+      const retryAfter = response.status === 429 ? response.headers.get('retry-after') : null;
+      const retry = retryAfter && /^\d+$/.test(retryAfter.trim()) ? ` (retry after ${retryAfter.trim()}s)` : '';
+      throw new Error(`Rebase API ${String(response.status)}${detail ? `: ${detail}` : ''}${retry}`);
     }
 
     return response.json();
   }
 
-  /** @param {{ status?: string, limit?: number, cursor?: string }} [params] */
+  /** @param {{ status?: string, limit?: number, cursor?: string | null }} [params] */
   listTickets(params = {}) {
     return this.request('GET', '/v1/tickets', { query: params });
   }
@@ -82,6 +100,11 @@ export class RebaseApi {
   /** @param {string} ticketId */
   getTicket(ticketId) {
     return this.request('GET', `/v1/tickets/${encodeURIComponent(ticketId)}`);
+  }
+
+  /** @param {string} ticketId */
+  getFixBundle(ticketId) {
+    return this.request('GET', `/v1/tickets/${encodeURIComponent(ticketId)}/fix-bundle`);
   }
 
   /**
@@ -102,15 +125,21 @@ export class RebaseApi {
 
   /**
    * Download the short-lived signed screenshot URL and return base64 PNG bytes,
-   * or null when the fetch fails / times out / exceeds the size cap (the signed
-   * URL may have just expired, or the asset may be unexpectedly large).
+   * or null when the URL isn't https / the fetch fails / times out / exceeds
+   * the size cap (the signed URL may have just expired, or the asset may be
+   * unexpectedly large).
    *
    * @param {string} url
    * @returns {Promise<string | null>}
    */
   async fetchScreenshotBase64(url) {
     try {
-      const response = await this.fetch(url, { signal: AbortSignal.timeout(this.timeoutMs) });
+      // The URL comes from the API response body — only follow it over https,
+      // and treat any redirect as anomalous (signed storage URLs never
+      // redirect; following one could reach an attacker-chosen origin).
+      if (new URL(url).protocol !== 'https:') return null;
+
+      const response = await this.fetch(url, { signal: AbortSignal.timeout(this.timeoutMs), redirect: 'error' });
       if (!response.ok) return null;
 
       // Reject oversized assets up-front when the server declares a length.

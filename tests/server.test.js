@@ -45,6 +45,13 @@ describe('RebaseApi', () => {
     expect(() => new RebaseApi({ token: '' })).toThrow(/REBASE_API_TOKEN/);
   });
 
+  it('rejects a base URL that is not https (except localhost)', () => {
+    expect(() => new RebaseApi({ token: 'rbk_test', baseUrl: 'http://api.rebase.dev' })).toThrow(/https/);
+    expect(() => new RebaseApi({ token: 'rbk_test', baseUrl: 'not a url' })).toThrow(/valid URL/);
+    expect(() => new RebaseApi({ token: 'rbk_test', baseUrl: 'http://localhost:8787' })).not.toThrow();
+    expect(() => new RebaseApi({ token: 'rbk_test', baseUrl: 'http://127.0.0.1:3000' })).not.toThrow();
+  });
+
   it('sends the bearer header and parses JSON', async () => {
     const fetchImpl = fakeFetch({ 'GET https://api.test/v1/tickets': jsonResponse({ tickets: [] }) });
     const client = new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test/', fetchImpl });
@@ -60,6 +67,16 @@ describe('RebaseApi', () => {
     const client = api({ '/v1/tickets': jsonResponse({ error: { message: 'missing scope' } }, 403) });
 
     await expect(client.listTickets()).rejects.toThrow(/403.*missing scope/);
+  });
+
+  it('appends the Retry-After hint to 429 errors', async () => {
+    const throttled = new Response(JSON.stringify({ error: { message: 'Too many requests.' } }), {
+      status: 429,
+      headers: { 'Content-Type': 'application/json', 'Retry-After': '17' },
+    });
+    const client = api({ '/v1/tickets': throttled });
+
+    await expect(client.listTickets()).rejects.toThrow(/429.*retry after 17s/);
   });
 
   it('passes an abort signal so requests time out', async () => {
@@ -88,6 +105,15 @@ describe('RebaseApi', () => {
     const client = api({ 'GET https://cdn.test/big.png': huge });
 
     expect(await client.fetchScreenshotBase64('https://cdn.test/big.png')).toBeNull();
+  });
+
+  it('refuses to fetch a non-https screenshot URL', async () => {
+    const fetchImpl = fakeFetch({});
+    const client = new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl });
+
+    expect(await client.fetchScreenshotBase64('http://169.254.169.254/latest/meta-data')).toBeNull();
+    expect(await client.fetchScreenshotBase64('not a url')).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 
@@ -140,7 +166,7 @@ describe('tools', () => {
     expect(Buffer.from(result.content[1].data, 'base64').toString()).toBe('png-bytes');
   });
 
-  it('get_ticket omits the image when the screenshot fetch fails', async () => {
+  it('get_ticket returns a note instead of the image when the screenshot fetch fails', async () => {
     const client = api({
       '/v1/tickets/t1': jsonResponse({ id: 't1', screenshotUrl: 'https://cdn.test/shot.png' }),
       'GET https://cdn.test/shot.png': new Response('', { status: 404 }),
@@ -149,7 +175,78 @@ describe('tools', () => {
 
     const result = await callTool(server, 'get_ticket', { ticket_id: 't1', include_screenshot: true });
 
-    expect(result.content).toHaveLength(1);
+    expect(result.content).toHaveLength(2);
+    expect(result.content[1].type).toBe('text');
+    expect(result.content[1].text).toMatch(/unavailable/i);
+  });
+
+  it('get_ticket notes when no screenshot exists at all', async () => {
+    const client = api({ '/v1/tickets/t1': jsonResponse({ id: 't1' }) });
+    const server = buildServer(client);
+
+    const result = await callTool(server, 'get_ticket', { ticket_id: 't1', include_screenshot: true });
+
+    expect(result.content).toHaveLength(2);
+    expect(result.content[1]).toMatchObject({ type: 'text' });
+    expect(result.content[1].text).toMatch(/unavailable/i);
+  });
+
+  it('a failing API call surfaces as an isError result, not a crash', async () => {
+    const client = api({ '/v1/tickets': jsonResponse({ error: { message: 'This token lacks the tickets:read scope.' } }, 403) });
+    const server = buildServer(client);
+
+    const result = await callTool(server, 'list_tickets', {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/403.*tickets:read/);
+  });
+
+  it('list_tickets accepts cursor: null and omits it from the query', async () => {
+    const fetchImpl = fakeFetch({ '/v1/tickets': jsonResponse({ tickets: [], nextCursor: null }) });
+    const client = new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl });
+    const server = buildServer(client);
+
+    const result = await callTool(server, 'list_tickets', { cursor: null });
+
+    expect(result.isError).not.toBe(true);
+    expect(String(fetchImpl.mock.calls[0][0])).not.toContain('cursor=');
+  });
+
+  it('get_fix_bundle returns the bundle and an image block when asked', async () => {
+    const png = Buffer.from('png-bytes');
+    const client = api({
+      '/v1/tickets/t1/fix-bundle': jsonResponse({
+        ticketId: 't1',
+        title: 'Checkout button throws TypeError on /cart',
+        url: 'https://shop.test/cart?rebase_ticket=t1',
+        summary: 'Cart total is read before prices load.',
+        reproSteps: ['Open /cart with an empty cache', 'Click checkout'],
+        failingTest: { spec: "test('checkout', …)" },
+        likelySource: [{ file: 'src/Cart.tsx', line: 142, permalink: 'https://github.com/x/y/blob/abc/src/Cart.tsx#L142', confidence: 'high' }],
+        screenshotUrl: 'https://cdn.test/shot.png',
+      }),
+      'GET https://cdn.test/shot.png': new Response(png),
+    });
+    const server = buildServer(client);
+
+    const result = await callTool(server, 'get_fix_bundle', { ticket_id: 't1', include_screenshot: true });
+
+    const bundle = JSON.parse(result.content[0].text);
+    expect(bundle.likelySource[0].line).toBe(142);
+    expect(bundle.failingTest.spec).toContain('checkout');
+    expect(result.content[1]).toMatchObject({ type: 'image', mimeType: 'image/png' });
+  });
+
+  it('get_fix_bundle surfaces a 404 as an isError result', async () => {
+    const client = api({
+      '/v1/tickets/missing/fix-bundle': jsonResponse({ error: { code: 'not_found', message: 'Resource not found.' } }, 404),
+    });
+    const server = buildServer(client);
+
+    const result = await callTool(server, 'get_fix_bundle', { ticket_id: 'missing' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/404.*not found/i);
   });
 
   it('add_comment posts the body', async () => {
