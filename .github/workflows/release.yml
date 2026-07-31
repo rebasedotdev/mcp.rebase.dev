@@ -12,8 +12,11 @@ run-name: 📦 Publish ${{ github.ref_name }} to npm
 # `on: push: tags` — the GITHUB_TOKEN caveat only applies to tags pushed by a
 # workflow.)
 #
-# One-time setup: add an automation NPM_TOKEN repo secret with publish rights to
-# the @rebasedotdev scope.
+# Auth is npm trusted publishing (OIDC) — no NPM_TOKEN secret. One-time setup on
+# npmjs.com: package Settings → Trusted publisher → GitHub Actions, with repo
+# rebasedotdev/mcp.rebase.dev and workflow filename release.yml. Trusted
+# publishing needs npm >= 11.5.1, hence Node 24 + the npm upgrade step below
+# (publish-time only — consumers still get engines >= 20).
 
 on:
   push:
@@ -38,9 +41,12 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version-file: .nvmrc
+          node-version: '24'
           cache: npm
           registry-url: https://registry.npmjs.org
+
+      # The runner's bundled npm can lag the 11.5.1 floor trusted publishing needs.
+      - run: npm install -g npm@^11
 
       - run: npm ci
       - run: npm test
@@ -57,5 +63,3 @@ jobs:
 
       - name: Publish to npm
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
