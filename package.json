@@ -7,7 +7,7 @@
     "rebase-mcp": "./bin/rebase-mcp.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "files": [
     "bin",
@@ -21,8 +21,16 @@
     "access": "public",
     "provenance": true
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rebasedotdev/mcp.rebase.dev.git"
+  },
+  "homepage": "https://rebase.dev",
+  "bugs": {
+    "url": "https://github.com/rebasedotdev/mcp.rebase.dev/issues"
+  },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {

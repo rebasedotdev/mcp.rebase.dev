@@ -38,12 +38,15 @@ For Claude Code: `claude mcp add rebase -e REBASE_API_TOKEN=rbk_... -- npx -y @r
 | Tool | What it does |
 | --- | --- |
 | `list_tickets` | List bug reports (filter by status, paginate). |
+| `search_tickets` | Semantic search over tickets by meaning ("anything about checkout?"). |
 | `get_ticket` | One report with the full capture; `include_screenshot: true` adds the image. |
+| `get_fix_bundle` | Focused fix package: triage summary, repro steps, a failing Playwright test, likely source files with permalinks. |
 | `add_comment` | Reply on the ticket thread (visible in the widget). |
 | `update_ticket_status` | Move a ticket to `open` / `in-progress` / `resolved`. |
 
-A typical agent loop: `list_tickets` → `get_ticket` → fix the bug with your own
-tools → `add_comment` with what changed → `update_ticket_status` to `resolved`.
+A typical agent loop: `list_tickets` (or `search_tickets`) → `get_fix_bundle`
+(or `get_ticket` for the full evidence trail) → fix the bug with your own tools
+→ `add_comment` with what changed → `update_ticket_status` to `resolved`.
 
 ## Worked example
 
@@ -88,9 +91,20 @@ A session in Claude Code, paraphrased:
 - **`list_tickets`** — `{ status?: "open"|"in-progress"|"resolved", limit?: 1–50,
   cursor?: string }`. Returns `{ tickets, nextCursor }`; pass `nextCursor` back as
   `cursor` to page.
+- **`search_tickets`** — `{ q: string (2–500 chars), status?, limit?: 1–25 }`.
+  Semantic search — matches by meaning, not keywords. Returns `{ results:
+  [{ id, title, status, kind, score, … }] }`, best match first. Covers only
+  recent AI-enriched tickets, so an empty result doesn't prove absence — fall
+  back to `list_tickets`. Rate-limited to 30/min; costs no AI credits.
 - **`get_ticket`** — `{ ticket_id: string, include_screenshot?: boolean }`. Returns
   the full ticket object (`aiTriage`, `capture`, `events`, `comments`,
   `externalIssues`, …). With `include_screenshot`, also returns an image block.
+- **`get_fix_bundle`** — `{ ticket_id: string, include_screenshot?: boolean }`.
+  Everything needed to fix the bug, minus the raw capture noise: `{ ticketId,
+  title, url, summary?, reproSteps?, failingTest?: { spec, notes? },
+  likelySource?: [{ file, line, permalink, confidence }], screenshotUrl? }`.
+  Fields the AI hasn't produced yet are absent, not null — a minimal bundle is
+  just `ticketId`/`title`/`url`.
 - **`add_comment`** — `{ ticket_id: string, body: string }` (≤ 5000 chars). Posted
   as the user who minted the token; `@Full Name` mentions notify that member.
 - **`update_ticket_status`** — `{ ticket_id: string, status:
@@ -114,12 +128,13 @@ A session in Claude Code, paraphrased:
 
 ## Production notes
 
-- Requires **Node ≥ 18** (uses the global `fetch` and `AbortSignal.timeout`).
+- Requires **Node ≥ 20** (uses the global `fetch` and `AbortSignal.timeout`).
 - Every API call has a **20s timeout**; screenshot downloads are capped at **10 MB**
   — a slow or oversized response fails the tool rather than hanging the agent.
 - Runtime dependencies are only `@modelcontextprotocol/sdk` and `zod` (both audited
   clean). Server-side, the `/v1` API enforces per-token rate limits (120 reads/min,
-  30 writes/min) and returns `404` for any ticket outside the token's project.
+  30 writes/min, 30 searches/min) and returns `404` for any ticket outside the
+  token's project.
 
 ## Troubleshooting
 
@@ -133,6 +148,8 @@ A session in Claude Code, paraphrased:
   paused until billing is restored.
 - **`Rebase API 404` on a ticket you can see** — that ticket belongs to a different
   project than the token. One token = one project.
+- **`Rebase API 503` from `search_tickets`** — semantic search is switched off on
+  that deployment (common on self-hosted/staging). Use `list_tickets` instead.
 - **`Rebase API request timed out`** — the API didn't respond within 20s; retry.
 - **Self-hosting / staging** — point the server at another API origin with
   `REBASE_API_URL` (e.g. `https://api.staging.rebase.dev`).

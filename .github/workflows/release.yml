@@ -5,13 +5,15 @@ run-name: 📦 Publish ${{ github.ref_name }} to npm
 # To cut a release:
 #   npm version patch   # bumps package.json, commits, creates the v* tag
 #   git push --follow-tags
+# (When package.json already carries the version to release — e.g. the first
+# release — skip `npm version` and tag by hand: `git tag -a vX.Y.Z -m X.Y.Z`.)
 # The pushed tag triggers this workflow, which re-runs the tests and publishes to
 # npm with provenance. (Tag pushed from a developer's own credentials DOES trigger
 # `on: push: tags` — the GITHUB_TOKEN caveat only applies to tags pushed by a
 # workflow.)
 #
 # One-time setup: add an automation NPM_TOKEN repo secret with publish rights to
-# the @rebase-dev scope.
+# the @rebasedotdev scope.
 
 on:
   push:

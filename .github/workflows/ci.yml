@@ -26,3 +26,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      # Prove the publishable tarball assembles correctly (files/bin config) on
+      # every PR, not for the first time when a release tag is pushed.
+      - run: npm pack --dry-run
