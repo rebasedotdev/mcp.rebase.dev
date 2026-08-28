@@ -176,7 +176,7 @@ export function buildServer(api) {
     'get_verification_status',
     {
       description:
-        'Check whether a ticket’s fix has been verified in CI. Poll this after pushing to your PR: `state` becomes `verified` on a green repro-check run, `failed` if the fix did not hold, `stale` after a force-push, or `none` before any run.',
+        'Check whether a ticket’s fix has been verified in CI. Poll this after pushing to your PR. `state` is one of: `verified` (green run), `failed` (the fix did not hold), `inconclusive` (a neutral run — e.g. no preview URL, or it already passed on the base branch), `stale` (a force-push superseded the run), `abandoned` (the PR closed unmerged), `pending`, or `none` (no run yet).',
       inputSchema: {
         ticket_id: z.string().describe('The ticket id.'),
       },

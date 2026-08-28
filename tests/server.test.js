@@ -326,6 +326,7 @@ describe('tools', () => {
   });
 
   it('add_comment forwards the client name as the agent label', async () => {
+    delete process.env.REBASE_AGENT_LABEL; // the client name must win here
     const fetchImpl = fakeFetch({
       'POST https://api.test/v1/tickets/t1/comments': jsonResponse({ id: 'c1', body: 'Fixed.' }, 201),
     });
