@@ -131,7 +131,9 @@ export function buildServer(api) {
       },
     },
     async ({ ticket_id: ticketId, body }) => {
-      const comment = await api.addComment(ticketId, body);
+      const label =
+        process.env.REBASE_AGENT_LABEL || server.server.getClientVersion()?.name || undefined;
+      const comment = await api.addComment(ticketId, body, label);
       return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
     }
   );
@@ -140,7 +142,7 @@ export function buildServer(api) {
     'update_ticket_status',
     {
       description:
-        'Change a ticket’s status. Resolving removes its pin from the page and notifies watchers — do it only once a fix has actually landed.',
+        'Change a ticket’s status. When the project requires verification, resolving records a fix CLAIM instead of resolving — the response then carries `heldForVerification: true`, and the ticket resolves on its own once the Rebase repro-check CI action reports a green run. Use claim_fix to link your PR and get_verification_status to follow up.',
       inputSchema: {
         ticket_id: z.string().describe('The ticket id.'),
         status: z.enum(STATUSES).describe('The new status.'),
@@ -148,6 +150,39 @@ export function buildServer(api) {
     },
     async ({ ticket_id: ticketId, status }) => {
       const result = await api.updateStatus(ticketId, status);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    }
+  );
+
+  server.registerTool(
+    'claim_fix',
+    {
+      description:
+        'Link the pull request that fixes a ticket. Call this after opening the PR, then put the returned `prMarker` line in the PR body — the Rebase repro-check CI action uses it to find and verify this ticket. A green run resolves it; your own resolve is held until then.',
+      inputSchema: {
+        ticket_id: z.string().describe('The ticket id.'),
+        pr_number: z.number().int().positive().describe('The pull request number.'),
+        repo: z.string().describe('The repository, as owner/name (e.g. acme/shop).'),
+        branch: z.string().optional().describe('The PR head branch, if handy.'),
+      },
+    },
+    async ({ ticket_id: ticketId, pr_number: prNumber, repo, branch }) => {
+      const result = await api.claimFix(ticketId, { pr_number: prNumber, repo, branch });
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    }
+  );
+
+  server.registerTool(
+    'get_verification_status',
+    {
+      description:
+        'Check whether a ticket’s fix has been verified in CI. Poll this after pushing to your PR: `state` becomes `verified` on a green repro-check run, `failed` if the fix did not hold, `stale` after a force-push, or `none` before any run.',
+      inputSchema: {
+        ticket_id: z.string().describe('The ticket id.'),
+      },
+    },
+    async ({ ticket_id: ticketId }) => {
+      const result = await api.verificationStatus(ticketId);
       return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     }
   );

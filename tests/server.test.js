@@ -259,7 +259,8 @@ describe('tools', () => {
     const result = await callTool(server, 'add_comment', { ticket_id: 't1', body: 'On it.' });
 
     const [, init] = fetchImpl.mock.calls[0];
-    expect(JSON.parse(init.body)).toEqual({ body: 'On it.' });
+    // The MCP client always identifies itself, so a label rides along.
+    expect(JSON.parse(init.body).body).toBe('On it.');
     expect(JSON.parse(result.content[0].text).id).toBe('c1');
   });
 
@@ -273,5 +274,67 @@ describe('tools', () => {
     const result = await callTool(server, 'update_ticket_status', { ticket_id: 't1', status: 'resolved' });
 
     expect(JSON.parse(result.content[0].text).status).toBe('resolved');
+  });
+
+  it('update_ticket_status passes through the held-for-verification response', async () => {
+    const fetchImpl = fakeFetch({
+      'PATCH https://api.test/v1/tickets/t1': jsonResponse({
+        id: 't1',
+        status: 'in-progress',
+        requestedStatus: 'resolved',
+        heldForVerification: true,
+        hint: 'Run the Rebase repro-check action in CI; a green run resolves this ticket.',
+      }),
+    });
+    const server = buildServer(new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl }));
+
+    const result = await callTool(server, 'update_ticket_status', { ticket_id: 't1', status: 'resolved' });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.heldForVerification).toBe(true);
+    expect(body.status).toBe('in-progress');
+  });
+
+  it('claim_fix links the PR and returns the marker', async () => {
+    const fetchImpl = fakeFetch({
+      'POST https://api.test/v1/tickets/t1/claim': jsonResponse({
+        ticketId: 't1',
+        claimed: true,
+        prMarker: 'Rebase-Ticket: t1',
+      }),
+    });
+    const server = buildServer(new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl }));
+
+    const result = await callTool(server, 'claim_fix', { ticket_id: 't1', pr_number: 87, repo: 'acme/shop' });
+
+    const [, init] = fetchImpl.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ prNumber: 87, repoFullName: 'acme/shop' });
+    expect(JSON.parse(result.content[0].text).prMarker).toBe('Rebase-Ticket: t1');
+  });
+
+  it('get_verification_status returns the verdict', async () => {
+    const fetchImpl = fakeFetch({
+      'GET https://api.test/v1/tickets/t1/verification': jsonResponse({
+        ticketId: 't1',
+        state: 'verified',
+        conclusion: 'success',
+      }),
+    });
+    const server = buildServer(new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl }));
+
+    const result = await callTool(server, 'get_verification_status', { ticket_id: 't1' });
+    expect(JSON.parse(result.content[0].text).state).toBe('verified');
+  });
+
+  it('add_comment forwards the client name as the agent label', async () => {
+    const fetchImpl = fakeFetch({
+      'POST https://api.test/v1/tickets/t1/comments': jsonResponse({ id: 'c1', body: 'Fixed.' }, 201),
+    });
+    const server = buildServer(new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl }));
+
+    await callTool(server, 'add_comment', { ticket_id: 't1', body: 'Fixed.' });
+
+    const [, init] = fetchImpl.mock.calls[0];
+    // The in-memory test client identifies as "test-client".
+    expect(JSON.parse(init.body).agentLabel).toBe('test-client');
   });
 });

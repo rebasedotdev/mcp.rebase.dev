@@ -42,7 +42,9 @@ For Claude Code: `claude mcp add rebase -e REBASE_API_TOKEN=rbk_... -- npx -y @r
 | `get_ticket` | One report with the full capture; `include_screenshot: true` adds the image. |
 | `get_fix_bundle` | Focused fix package: triage summary, repro steps, a failing Playwright test, likely source files with permalinks. |
 | `add_comment` | Reply on the ticket thread (visible in the widget). |
-| `update_ticket_status` | Move a ticket to `open` / `in-progress` / `resolved`. |
+| `update_ticket_status` | Move a ticket to `open` / `in-progress` / `resolved`. When the project requires verification, resolving records a fix *claim* — a green CI repro-check run resolves it. |
+| `claim_fix` | Link the PR that fixes a ticket; returns the `Rebase-Ticket:` marker to embed in the PR body. |
+| `get_verification_status` | Check whether a fix has been verified in CI (`verified` / `failed` / `stale` / `none`). |
 
 A typical agent loop: `list_tickets` (or `search_tickets`) → `get_fix_bundle`
 (or `get_ticket` for the full evidence trail) → fix the bug with your own tools

@@ -110,9 +110,11 @@ export class RebaseApi {
   /**
    * @param {string} ticketId
    * @param {string} body
+   * @param {string|undefined} agentLabel  display provenance ("via Claude Code")
    */
-  addComment(ticketId, body) {
-    return this.request('POST', `/v1/tickets/${encodeURIComponent(ticketId)}/comments`, { body: { body } });
+  addComment(ticketId, body, agentLabel) {
+    const payload = agentLabel ? { body, agentLabel } : { body };
+    return this.request('POST', `/v1/tickets/${encodeURIComponent(ticketId)}/comments`, { body: payload });
   }
 
   /**
@@ -121,6 +123,28 @@ export class RebaseApi {
    */
   updateStatus(ticketId, status) {
     return this.request('PATCH', `/v1/tickets/${encodeURIComponent(ticketId)}`, { body: { status } });
+  }
+
+  /**
+   * Link a PR to a ticket you're fixing. Returns the `prMarker` to embed in the
+   * PR body so the CI repro check can discover and verify it.
+   *
+   * @param {string} ticketId
+   * @param {{ pr_number: number, repo: string, branch?: string }} args
+   */
+  claimFix(ticketId, { pr_number: prNumber, repo, branch }) {
+    return this.request('POST', `/v1/tickets/${encodeURIComponent(ticketId)}/claim`, {
+      body: { prNumber, repoFullName: repo, ...(branch ? { branch } : {}) },
+    });
+  }
+
+  /**
+   * The current CI verification verdict for a ticket (poll after pushing).
+   *
+   * @param {string} ticketId
+   */
+  verificationStatus(ticketId) {
+    return this.request('GET', `/v1/tickets/${encodeURIComponent(ticketId)}/verification`);
   }
 
   /**
