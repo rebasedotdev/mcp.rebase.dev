@@ -1,7 +1,7 @@
 {
   "name": "@rebasedotdev/mcp",
   "version": "0.2.0",
-  "description": "MCP server for Rebase \u2014 give your coding agent the full context of every bug report.",
+  "description": "MCP server for Rebase — give your coding agent the full context of every bug report.",
   "type": "module",
   "bin": {
     "rebase-mcp": "./bin/rebase-mcp.js"

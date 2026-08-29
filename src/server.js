@@ -31,7 +31,7 @@ async function appendScreenshot(api, content, screenshotUrl) {
 }
 
 /**
- * Build the Rebase MCP server: six tools that let a coding agent find a bug
+ * Build the Rebase MCP server: the tools that let a coding agent find a bug
  * report (list, semantic search), pull its full capture (console, network
  * failures, suspected source location, AI triage, screenshot) or a focused
  * fix bundle, reply to the reporter, and resolve the ticket. The agent fixes
@@ -131,8 +131,17 @@ export function buildServer(api) {
       },
     },
     async ({ ticket_id: ticketId, body }) => {
+      // The label is cosmetic provenance from an arbitrary source (env var or
+      // the client's self-reported name) — the API rejects >60 chars with a
+      // 422, which would fail EVERY comment for that client. Trim, never lose
+      // the comment over metadata.
+      const rawLabel =
+        process.env.REBASE_AGENT_LABEL || server.server.getClientVersion()?.name || '';
       const label =
-        process.env.REBASE_AGENT_LABEL || server.server.getClientVersion()?.name || undefined;
+        rawLabel
+          .replace(/[\x00-\x1f\x7f]/g, ' ')
+          .trim()
+          .slice(0, 60) || undefined;
       const comment = await api.addComment(ticketId, body, label);
       return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
     }
