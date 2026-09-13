@@ -1,6 +1,6 @@
 /**
- * Thin client for Rebase's /v1 agent API. Auth is a project-scoped `rbk_*`
- * token (minted in widget Settings → Project → API tokens) sent as a Bearer
+ * Thin client for Rebase's /v1 agent API. Auth is a personal `rbk_*`
+ * token (minted in app.rebase.dev → your account → Your coding agent) sent as a Bearer
  * header. Kept dependency-free: plain fetch, JSON in/out.
  */
 
@@ -16,7 +16,7 @@ export class RebaseApi {
    */
   constructor({ token, baseUrl = 'https://api.rebase.dev', fetchImpl = fetch, timeoutMs = DEFAULT_TIMEOUT_MS }) {
     if (!token) {
-      throw new Error('REBASE_API_TOKEN is required (mint one in widget Settings → Project → API tokens).');
+      throw new Error('REBASE_API_TOKEN is required (mint one in app.rebase.dev → your account → Your coding agent).');
     }
     let parsed;
     try {
@@ -87,12 +87,16 @@ export class RebaseApi {
     return response.json();
   }
 
-  /** @param {{ status?: string, limit?: number, cursor?: string | null }} [params] */
+  listProjects() {
+    return this.request('GET', '/v1/projects');
+  }
+
+  /** @param {{ project?: string, status?: string, limit?: number, cursor?: string | null }} [params] */
   listTickets(params = {}) {
     return this.request('GET', '/v1/tickets', { query: params });
   }
 
-  /** @param {{ q: string, status?: string, limit?: number }} params */
+  /** @param {{ q: string, project?: string, status?: string, limit?: number }} params */
   searchTickets(params) {
     return this.request('GET', '/v1/tickets/search', { query: params });
   }
@@ -103,79 +107,76 @@ export class RebaseApi {
   }
 
   /** @param {string} ticketId */
-  getFixBundle(ticketId) {
-    return this.request('GET', `/v1/tickets/${encodeURIComponent(ticketId)}/fix-bundle`);
+  getInvestigationBundle(ticketId) {
+    return this.request('GET', `/v1/tickets/${encodeURIComponent(ticketId)}/investigation-bundle`);
+  }
+
+  fetchTicketScreenshot(ticketId) {
+    return this.fetchScreenshotBase64(`${this.baseUrl}/v1/tickets/${encodeURIComponent(ticketId)}/screenshot`, true);
   }
 
   /**
-   * @param {string} ticketId
-   * @param {string} body
-   * @param {string|undefined} agentLabel  display provenance ("via Claude Code")
-   */
-  addComment(ticketId, body, agentLabel) {
-    const payload = agentLabel ? { body, agentLabel } : { body };
-    return this.request('POST', `/v1/tickets/${encodeURIComponent(ticketId)}/comments`, { body: payload });
-  }
-
-  /**
-   * @param {string} ticketId
-   * @param {string} status
-   */
-  updateStatus(ticketId, status) {
-    return this.request('PATCH', `/v1/tickets/${encodeURIComponent(ticketId)}`, { body: { status } });
-  }
-
-  /**
-   * Link a PR to a ticket you're fixing. Returns the `prMarker` to embed in the
-   * PR body so the CI repro check can discover and verify it.
-   *
-   * @param {string} ticketId
-   * @param {{ pr_number: number, repo: string, branch?: string }} args
-   */
-  claimFix(ticketId, { pr_number: prNumber, repo, branch }) {
-    return this.request('POST', `/v1/tickets/${encodeURIComponent(ticketId)}/claim`, {
-      body: { prNumber, repoFullName: repo, ...(branch ? { branch } : {}) },
-    });
-  }
-
-  /**
-   * The current CI verification verdict for a ticket (poll after pushing).
-   *
-   * @param {string} ticketId
-   */
-  verificationStatus(ticketId) {
-    return this.request('GET', `/v1/tickets/${encodeURIComponent(ticketId)}/verification`);
-  }
-
-  /**
-   * Download the short-lived signed screenshot URL and return base64 PNG bytes,
-   * or null when the URL isn't https / the fetch fails / times out / exceeds
-   * the size cap (the signed URL may have just expired, or the asset may be
-   * unexpectedly large).
+   * Read bounded PNG bytes from the configured API origin. Production callers
+   * construct the authenticated ticket route; returned provider/storage URLs
+   * are never fetched. Redirects, foreign origins and non-PNG responses fail closed.
    *
    * @param {string} url
    * @returns {Promise<string | null>}
    */
-  async fetchScreenshotBase64(url) {
+  async fetchScreenshotBase64(url, authenticated = false) {
+    let timer;
     try {
-      // The URL comes from the API response body — only follow it over https,
-      // and treat any redirect as anomalous (signed storage URLs never
-      // redirect; following one could reach an attacker-chosen origin).
-      if (new URL(url).protocol !== 'https:') return null;
+      // Allow HTTP only for the exact configured loopback API origin.
+      // Production uses a constructed authenticated route and rejects redirects.
+      const parsed = new URL(url);
+      const base = new URL(this.baseUrl);
+      const localApi = base.protocol === 'http:' &&
+        ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname) &&
+        parsed.origin === base.origin;
+      if (parsed.username || parsed.password || parsed.origin !== base.origin ||
+        (parsed.protocol !== 'https:' && !localApi)) return null;
 
-      const response = await this.fetch(url, { signal: AbortSignal.timeout(this.timeoutMs), redirect: 'error' });
+
+      const controller = new AbortController();
+      timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      const signal = controller.signal;
+      const response = await this.fetch(url, { signal, redirect: 'error',
+        ...(authenticated ? { headers: { Authorization: `Bearer ${this.token}`, Accept: 'image/png' } } : {}),
+      });
       if (!response.ok) return null;
 
       // Reject oversized assets up-front when the server declares a length.
       const declared = Number(response.headers.get('content-length') ?? '0');
-      if (declared > MAX_SCREENSHOT_BYTES) return null;
-
-      const buffer = await response.arrayBuffer();
-      if (buffer.byteLength > MAX_SCREENSHOT_BYTES) return null; // length lied / was absent
-
-      return Buffer.from(buffer).toString('base64');
+      if (declared > MAX_SCREENSHOT_BYTES || response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'image/png' || !response.body) {
+        controller.abort();
+        await response.body?.cancel();
+        return null;
+      }
+      const reader = response.body.getReader();
+      const chunks = [];
+      let size = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > MAX_SCREENSHOT_BYTES) {
+            controller.abort();
+            await reader.cancel();
+            return null;
+          }
+          chunks.push(Buffer.from(value));
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      const buffer = Buffer.concat(chunks, size);
+      if (!buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return null;
+      return buffer.toString('base64');
     } catch {
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 }
