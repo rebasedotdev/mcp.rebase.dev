@@ -10,7 +10,7 @@ function fakeFetch(routes) {
   return vi.fn(async (url, init = {}) => {
     const method = init.method ?? 'GET';
     const key = `${method} ${String(url)}`;
-    const match = Object.entries(routes).find(([pattern]) => key.includes(pattern));
+    const match = Object.entries(routes).sort(([a], [b]) => b.length - a.length).find(([pattern]) => key.includes(pattern));
     if (!match) throw new Error(`Unexpected request: ${key}`);
     const [, handler] = match;
     return typeof handler === 'function' ? handler(url, init) : handler;
@@ -115,9 +115,38 @@ describe('RebaseApi', () => {
     expect(await client.fetchScreenshotBase64('not a url')).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it('allows local screenshots only from the configured API origin without credentials or redirects', async () => {
+    const url = 'http://127.0.0.1:8108/files/shot.png';
+    const fetchImpl = fakeFetch({ [`GET ${url}`]: new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), { headers: { 'content-type': 'image/png' } }) });
+    const client = new RebaseApi({ token: 'rbk_test', baseUrl: 'http://127.0.0.1:8108', fetchImpl });
+    for (const forbidden of [
+      'http://127.0.0.1:8109/files/shot.png',
+      'http://localhost:8108/files/shot.png',
+      'http://169.254.169.254/latest/meta-data',
+      'http://user:password@127.0.0.1:8108/files/shot.png',
+    ]) expect(await client.fetchScreenshotBase64(forbidden)).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(await client.fetchScreenshotBase64(url)).toBe(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64'));
+    expect(fetchImpl.mock.calls[0][1].redirect).toBe('error');
+    expect(fetchImpl.mock.calls[0][1].headers).toBeUndefined();
+  });
 });
 
 describe('tools', () => {
+  it('discovers the personal account’s projects', async () => {
+    const server = buildServer(api({ '/v1/projects': jsonResponse({ projects: [{ key: 'pk_one', name: 'One' }] }) }));
+    const result = await callTool(server, 'list_projects', {});
+    expect(JSON.parse(result.content[0].text).projects[0].key).toBe('pk_one');
+  });
+  it('passes an explicit personal project selection to list and search', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ tickets: [], results: [] }));
+    const client = new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl });
+    await callTool(buildServer(client), 'list_tickets', { project: 'pk_one' });
+    await callTool(buildServer(client), 'search_tickets', { project: 'pk_two', q: 'checkout' });
+    expect(String(fetchImpl.mock.calls[0][0])).toContain('project=pk_one');
+    expect(String(fetchImpl.mock.calls[1][0])).toContain('project=pk_two');
+  });
   it('list_tickets passes filters through and returns JSON text', async () => {
     const fetchImpl = fakeFetch({ '/v1/tickets': jsonResponse({ tickets: [{ id: 't1' }], nextCursor: null }) });
     const client = new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl });
@@ -152,10 +181,10 @@ describe('tools', () => {
   });
 
   it('get_ticket returns the capture and an image block when asked', async () => {
-    const png = Buffer.from('png-bytes');
+    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
     const client = api({
       '/v1/tickets/t1': jsonResponse({ id: 't1', screenshotUrl: 'https://cdn.test/shot.png' }),
-      'GET https://cdn.test/shot.png': new Response(png),
+      'GET https://api.test/v1/tickets/t1/screenshot': new Response(png, { headers: { 'content-type': 'image/png' } }),
     });
     const server = buildServer(client);
 
@@ -163,7 +192,7 @@ describe('tools', () => {
 
     expect(result.content).toHaveLength(2);
     expect(result.content[1]).toMatchObject({ type: 'image', mimeType: 'image/png' });
-    expect(Buffer.from(result.content[1].data, 'base64').toString()).toBe('png-bytes');
+    expect(Buffer.from(result.content[1].data, 'base64')).toEqual(png);
   });
 
   it('get_ticket returns a note instead of the image when the screenshot fetch fails', async () => {
@@ -212,10 +241,10 @@ describe('tools', () => {
     expect(String(fetchImpl.mock.calls[0][0])).not.toContain('cursor=');
   });
 
-  it('get_fix_bundle returns the bundle and an image block when asked', async () => {
-    const png = Buffer.from('png-bytes');
+  it('get_investigation_bundle returns the bundle and an image block when asked', async () => {
+    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
     const client = api({
-      '/v1/tickets/t1/fix-bundle': jsonResponse({
+      '/v1/tickets/t1/investigation-bundle': jsonResponse({
         ticketId: 't1',
         title: 'Checkout button throws TypeError on /cart',
         url: 'https://shop.test/cart?rebase_ticket=t1',
@@ -225,117 +254,34 @@ describe('tools', () => {
         likelySource: [{ file: 'src/Cart.tsx', line: 142, permalink: 'https://github.com/x/y/blob/abc/src/Cart.tsx#L142', confidence: 'high' }],
         screenshotUrl: 'https://cdn.test/shot.png',
       }),
-      'GET https://cdn.test/shot.png': new Response(png),
+      'GET https://api.test/v1/tickets/t1/screenshot': new Response(png, { headers: { 'content-type': 'image/png' } }),
     });
     const server = buildServer(client);
 
-    const result = await callTool(server, 'get_fix_bundle', { ticket_id: 't1', include_screenshot: true });
+    const result = await callTool(server, 'get_investigation_bundle', { ticket_id: 't1', include_screenshot: true });
 
     const bundle = JSON.parse(result.content[0].text);
     expect(bundle.likelySource[0].line).toBe(142);
-    expect(bundle.failingTest.spec).toContain('checkout');
     expect(result.content[1]).toMatchObject({ type: 'image', mimeType: 'image/png' });
   });
 
-  it('get_fix_bundle surfaces a 404 as an isError result', async () => {
+  it('get_investigation_bundle surfaces a 404 as an isError result', async () => {
     const client = api({
-      '/v1/tickets/missing/fix-bundle': jsonResponse({ error: { code: 'not_found', message: 'Resource not found.' } }, 404),
+      '/v1/tickets/missing/investigation-bundle': jsonResponse({ error: { code: 'not_found', message: 'Resource not found.' } }, 404),
     });
     const server = buildServer(client);
 
-    const result = await callTool(server, 'get_fix_bundle', { ticket_id: 'missing' });
+    const result = await callTool(server, 'get_investigation_bundle', { ticket_id: 'missing' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/404.*not found/i);
   });
 
-  it('add_comment posts the body', async () => {
-    const fetchImpl = fakeFetch({
-      'POST https://api.test/v1/tickets/t1/comments': jsonResponse({ id: 'c1', body: 'On it.' }, 201),
-    });
-    const client = new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl });
-    const server = buildServer(client);
-
-    const result = await callTool(server, 'add_comment', { ticket_id: 't1', body: 'On it.' });
-
-    const [, init] = fetchImpl.mock.calls[0];
-    // The MCP client always identifies itself, so a label rides along.
-    expect(JSON.parse(init.body).body).toBe('On it.');
-    expect(JSON.parse(result.content[0].text).id).toBe('c1');
-  });
-
-  it('update_ticket_status patches the status', async () => {
-    const fetchImpl = fakeFetch({
-      'PATCH https://api.test/v1/tickets/t1': jsonResponse({ id: 't1', status: 'resolved' }),
-    });
-    const client = new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl });
-    const server = buildServer(client);
-
-    const result = await callTool(server, 'update_ticket_status', { ticket_id: 't1', status: 'resolved' });
-
-    expect(JSON.parse(result.content[0].text).status).toBe('resolved');
-  });
-
-  it('update_ticket_status passes through the held-for-verification response', async () => {
-    const fetchImpl = fakeFetch({
-      'PATCH https://api.test/v1/tickets/t1': jsonResponse({
-        id: 't1',
-        status: 'in-progress',
-        requestedStatus: 'resolved',
-        heldForVerification: true,
-        hint: 'Run the Rebase repro-check action in CI; a green run resolves this ticket.',
-      }),
-    });
+  it.each(['add_comment', 'update_ticket_status', 'claim_fix', 'get_verification_status'])('does not expose removed write/verification tool %s', async (name) => {
+    const fetchImpl = vi.fn();
     const server = buildServer(new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl }));
-
-    const result = await callTool(server, 'update_ticket_status', { ticket_id: 't1', status: 'resolved' });
-    const body = JSON.parse(result.content[0].text);
-    expect(body.heldForVerification).toBe(true);
-    expect(body.status).toBe('in-progress');
-  });
-
-  it('claim_fix links the PR and returns the marker', async () => {
-    const fetchImpl = fakeFetch({
-      'POST https://api.test/v1/tickets/t1/claim': jsonResponse({
-        ticketId: 't1',
-        claimed: true,
-        prMarker: 'Rebase-Ticket: t1',
-      }),
-    });
-    const server = buildServer(new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl }));
-
-    const result = await callTool(server, 'claim_fix', { ticket_id: 't1', pr_number: 87, repo: 'acme/shop' });
-
-    const [, init] = fetchImpl.mock.calls[0];
-    expect(JSON.parse(init.body)).toEqual({ prNumber: 87, repoFullName: 'acme/shop' });
-    expect(JSON.parse(result.content[0].text).prMarker).toBe('Rebase-Ticket: t1');
-  });
-
-  it('get_verification_status returns the verdict', async () => {
-    const fetchImpl = fakeFetch({
-      'GET https://api.test/v1/tickets/t1/verification': jsonResponse({
-        ticketId: 't1',
-        state: 'verified',
-        conclusion: 'success',
-      }),
-    });
-    const server = buildServer(new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl }));
-
-    const result = await callTool(server, 'get_verification_status', { ticket_id: 't1' });
-    expect(JSON.parse(result.content[0].text).state).toBe('verified');
-  });
-
-  it('add_comment forwards the client name as the agent label', async () => {
-    delete process.env.REBASE_AGENT_LABEL; // the client name must win here
-    const fetchImpl = fakeFetch({
-      'POST https://api.test/v1/tickets/t1/comments': jsonResponse({ id: 'c1', body: 'Fixed.' }, 201),
-    });
-    const server = buildServer(new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl }));
-
-    await callTool(server, 'add_comment', { ticket_id: 't1', body: 'Fixed.' });
-
-    const [, init] = fetchImpl.mock.calls[0];
-    // The in-memory test client identifies as "test-client".
-    expect(JSON.parse(init.body).agentLabel).toBe('test-client');
+    const result = await callTool(server, name, { ticket_id: 't1', body: 'test', status: 'resolved' });
+    expect(result.isError).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
