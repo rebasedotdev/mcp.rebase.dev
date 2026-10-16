@@ -51,6 +51,7 @@ export class RebaseApi {
     try {
       response = await this.fetch(url, {
         method,
+        redirect: 'error',
         headers: {
           Authorization: `Bearer ${this.token}`,
           Accept: 'application/json',

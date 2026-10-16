@@ -14,7 +14,9 @@ run-name: 📦 Publish ${{ github.ref_name }} to npm
 #
 # Auth is npm trusted publishing (OIDC) — no NPM_TOKEN secret. One-time setup on
 # npmjs.com: package Settings → Trusted publisher → GitHub Actions, with repo
-# rebasedotdev/mcp.rebase.dev and workflow filename release.yml. Trusted
+# rebasedotdev/mcp.rebase.dev, workflow filename release.yml and environment npm, so
+# only this job in that environment can publish. A tag ruleset limits who may create
+# v* tags, and the job refuses a tag whose commit is not on main. Trusted
 # publishing needs npm >= 11.5.1, hence Node 24 + the npm upgrade step below
 # (publish-time only — consumers still get engines >= 20).
 
@@ -34,11 +36,23 @@ jobs:
     name: Test & publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: npm
     permissions:
       contents: read
       id-token: write # npm provenance
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse a tag whose commit is not on main
+        # fetch-depth 0 brought every branch, origin/main included.
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "::error::Tag ${GITHUB_REF_NAME} points at a commit that is not on main."
+            exit 1
+          }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
