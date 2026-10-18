@@ -13,3 +13,7 @@ Tools: `list_projects`, `list_tickets`, `search_tickets`, `get_ticket`, `get_inv
 No comments, status changes, fix verification or code mutations are exposed. Run `npm test` before release. Coordinate this incompatible tool removal with the API reporting release; existing published versions are unchanged until a new package is published.
 
 Development and CI use Node 24 from `.nvmrc`; the published stdio runtime remains compatible with its declared Node 20+ contract. Run `npm ci --ignore-scripts` and `npm test` before packaging.
+
+## Releasing
+
+Bump the version (`npm version patch`, or tag by hand with `git tag -a vX.Y.Z -m X.Y.Z` when `package.json` already has it) and `git push --follow-tags`. Only admins may push `v*` tags, and the tag's commit must be on `main`. The Release workflow tests the package and stages the version on npm through trusted publishing; nothing goes live yet. Approve it on npmjs.com → Staged Packages → Approve with your security key, or with `npm stage approve <id>`. The trusted publisher is set up without "Allow npm publish", so a tag can never put a version live on its own.
