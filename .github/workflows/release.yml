@@ -1,5 +1,5 @@
 name: Release
-run-name: 📦 Publish ${{ github.ref_name }} to npm
+run-name: 📦 Stage ${{ github.ref_name }} on npm
 
 # Tag-triggered publish — the lowest-ceremony release flow for a single package.
 # To cut a release:
@@ -7,17 +7,19 @@ run-name: 📦 Publish ${{ github.ref_name }} to npm
 #   git push --follow-tags
 # (When package.json already carries the version to release — e.g. the first
 # release — skip `npm version` and tag by hand: `git tag -a vX.Y.Z -m X.Y.Z`.)
-# The pushed tag triggers this workflow, which re-runs the tests and publishes to
-# npm with provenance. (Tag pushed from a developer's own credentials DOES trigger
+# The pushed tag triggers this workflow, which re-runs the tests and stages the
+# version on npm with provenance. Nothing goes live until a maintainer approves it:
+# npmjs.com → Staged Packages → Approve (security key), or `npm stage approve <id>`. (Tag pushed from a developer's own credentials DOES trigger
 # `on: push: tags` — the GITHUB_TOKEN caveat only applies to tags pushed by a
 # workflow.)
 #
 # Auth is npm trusted publishing (OIDC) — no NPM_TOKEN secret. One-time setup on
 # npmjs.com: package Settings → Trusted publisher → GitHub Actions, with repo
 # rebasedotdev/mcp.rebase.dev, workflow filename release.yml and environment npm, so
-# only this job in that environment can publish. A tag ruleset limits who may create
-# v* tags, and the job refuses a tag whose commit is not on main. Trusted
-# publishing needs npm >= 11.5.1, hence Node 24 + the npm upgrade step below
+# only this job in that environment can stage a version; leave "Allow npm publish"
+# unticked, so a direct publish is refused. A tag ruleset limits who may create
+# v* tags, and the job refuses a tag whose commit is not on main. Staged publishing
+# needs npm >= 11.15.0, hence Node 24 + the npm upgrade step below
 # (publish-time only — consumers still get engines >= 20).
 
 on:
@@ -59,8 +61,8 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
 
-      # The runner's bundled npm can lag the 11.5.1 floor trusted publishing needs.
-      - run: npm install -g npm@^11
+      # The runner's bundled npm can lag the 11.15.0 floor staged publishing needs.
+      - run: npm install -g npm@^11.15.0
 
       - run: npm ci
       - run: npm test
@@ -75,5 +77,5 @@ jobs:
             exit 1
           fi
 
-      - name: Publish to npm
-        run: npm publish --provenance --access public
+      - name: Stage on npm (a maintainer approves it on npmjs.com)
+        run: npm stage publish --provenance --access public
