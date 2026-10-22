@@ -40,6 +40,18 @@ async function callTool(server, name, args) {
   }
 }
 
+/** The tool list, through a real MCP client. */
+async function listTools(server) {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'test-client', version: '0.0.0' });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    return (await client.listTools()).tools;
+  } finally {
+    await client.close();
+  }
+}
+
 describe('RebaseApi', () => {
   it('requires a token', () => {
     expect(() => new RebaseApi({ token: '' })).toThrow(/REBASE_API_TOKEN/);
@@ -178,6 +190,23 @@ describe('tools', () => {
     expect(String(url)).toContain('status=open');
     expect(String(url)).toContain('limit=5');
     expect(JSON.parse(result.content[0].text).results[0].score).toBe(0.91);
+  });
+
+  it('report_stats is read-only and passes its filters through', async () => {
+    const fetchImpl = fakeFetch({ '/v1/stats': jsonResponse({ groupBy: 'day', total: 3, buckets: [{ key: '2026-10-20', label: '20 Oct', count: 3 }] }) });
+    const client = new RebaseApi({ token: 'rbk_test', baseUrl: 'https://api.test', fetchImpl });
+    const server = buildServer(client);
+
+    const result = await callTool(server, 'report_stats', { group_by: 'day', project: 'pk_one', since: '2026-10-14', status: 'open' });
+
+    const [url] = fetchImpl.mock.calls[0];
+    expect(String(url)).toContain('/v1/stats?');
+    expect(String(url)).toContain('group_by=day');
+    expect(String(url)).toContain('project=pk_one');
+    expect(String(url)).toContain('since=2026-10-14');
+    expect(JSON.parse(result.content[0].text).total).toBe(3);
+    const tools = await listTools(buildServer(client));
+    expect(tools.find((t) => t.name === 'report_stats').annotations.readOnlyHint).toBe(true);
   });
 
   it('get_ticket returns the capture and an image block when asked', async () => {
