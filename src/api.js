@@ -102,6 +102,11 @@ export class RebaseApi {
     return this.request('GET', '/v1/tickets/search', { query: params });
   }
 
+  /** Report counts grouped one way (GET /v1/stats). */
+  reportStats(params) {
+    return this.request('GET', '/v1/stats', { query: params });
+  }
+
   /** @param {string} ticketId */
   getTicket(ticketId) {
     return this.request('GET', `/v1/tickets/${encodeURIComponent(ticketId)}`);
